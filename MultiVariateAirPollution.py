@@ -83,7 +83,7 @@ def preprocess(values):
     scaler = MinMaxScaler(feature_range=(0, 1))
     values_scaled = scaler.fit_transform(values)
     # frame as supervised learning
-    reframe = series_to_supervised(values_scaled)
+    reframe = series_to_supervised(values_scaled, n_hours, 1)
     # drop column don't need to predict
     reframe.drop(reframe.columns[[9, 10, 11, 12, 13, 14, 15]], axis=1, inplace=True)
     return reframe.values,scaler
@@ -93,12 +93,12 @@ def split(values):
     test = values[n_train:, :]
 
     # split into input and output
-    train_X, train_y = train[:, :-1], train[:, -1]
-    test_X, test_y = test[:, :-1], test[:, -1]
+    train_X, train_y = train[:, :n_obs], train[:, -n_features]
+    test_X, test_y = test[:, :n_obs], test[:, -n_features]
 
     # reshape to be 3d [sample, time step, feature]
-    train_X = train_X.reshape(train_X.shape[0], 1, train_X.shape[1])
-    test_X = test_X.reshape(test_X.shape[0], 1, test_X.shape[1])
+    train_X = train_X.reshape((train_X.shape[0], n_hours, n_features))
+    test_X = test_X.reshape((test_X.shape[0], n_hours, n_features))
     return train_X, train_y, test_X, test_y
 
 
@@ -115,11 +115,11 @@ def fit_lstm():
 
 def invert_scale():
     # invert scaling for forecast
-    inv_yhat = concatenate((yhat, test_X[:, 1:]), axis=1)
+    inv_yhat = concatenate((yhat, test_X[:, -7:]), axis=1)
     inv_yhat = scaler.inverse_transform(inv_yhat)
     inv_yhat = inv_yhat[:, 0]
     # invert scaling for actual
-    inv_y = concatenate((test_y, test_X[:, 1:]), axis=1)
+    inv_y = concatenate((test_y, test_X[:, -7:]), axis=1)
     inv_y = scaler.inverse_transform(inv_y)
     inv_y = inv_y[:, 0]
     return inv_y,inv_yhat
@@ -138,6 +138,11 @@ dataset = read_csv('pollution.csv',header = 0, index_col=0)
 # values is numpy array shape (43800,8)
 values = dataset.values
 
+# specify number of lag hour
+n_hours = 3
+n_features = 8
+n_obs = n_hours * n_features
+
 #preprocess to ready to train
 values,scaler = preprocess(values)
 
@@ -151,16 +156,16 @@ visualizeHistory(history)
 
 # make a prediction
 yhat = model.predict(test_X)
-print("yhat")
-print(yhat)
-print(yhat.shape)
+# print("yhat")
+# print(yhat)
+# print(yhat.shape)
 
 #invert to compute rmse
-test_X = test_X.reshape((test_X.shape[0], test_X.shape[2]))
+test_X = test_X.reshape((test_X.shape[0], n_hours*n_features))
 test_y = test_y.reshape((len(test_y), 1))
 inv_y, inv_yhat = invert_scale()
-print(inv_yhat)
-print(inv_y)
+# print(inv_yhat)
+# print(inv_y)
 
 # calculate RMSE
 rmse = sqrt(mean_squared_error(inv_y, inv_yhat))
