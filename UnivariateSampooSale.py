@@ -94,12 +94,6 @@ def forecast_lstm(model, batch_size, X):
 	yhat = model.predict(X, batch_size = batch_size)
 	return yhat[0][0]
 
-
-
-
-
-
-
 # load dataset
 raw_values = loadAndVisualizeData()
 
@@ -121,7 +115,6 @@ scaler, train_scaled, test_scaled = scale(train,test)
 repeats = 1
 error_scores = []
 for r in range(repeats):
-
 	#fit the model
 	lstm_model = fit_lstm(train_scaled, 1, 120, 4)
 	#forecast model entire training set to build up state
