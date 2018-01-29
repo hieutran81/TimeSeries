@@ -6,10 +6,7 @@ from pandas import DataFrame
 from pandas import concat
 from pandas import Series
 from sklearn.preprocessing import MinMaxScaler
-from keras.models import Sequential
-from keras.layers import LSTM
-from keras.layers import Dense
-from keras.layers import SimpleRNN
+from sklearn.svm import SVR
 from numpy import array
 from math import sqrt
 from sklearn.metrics import mean_squared_error
@@ -69,7 +66,7 @@ def prepare_data(series, n_test, n_lag, n_seq):
     #transform to  supervised learning
     supervised = series_to_supervised(scaled_values,n_lag,n_seq)
     supervised_values = supervised.values
-    print(supervised.head())
+    #print(supervised.head())
 
     # split into train and test set
     train, test = supervised_values[0:-n_test], supervised_values[-n_test:]
@@ -77,39 +74,40 @@ def prepare_data(series, n_test, n_lag, n_seq):
 
 
 # fit an LSTM network to training data
-def fit_lstm(train, n_lag, n_seq, n_batch, nb_epoch, n_neurons):
+def fit_svr(train, n_lag, n_seq):
     # reshape training into [samples, timesteps, features]
     X, y = train[:, 0:n_lag], train[:, n_lag:]
-    X = X.reshape(X.shape[0], 1, X.shape[1])
-    # design network
-    model = Sequential()
-    #model.add(SimpleRNN(n_neurons,batch_input_shape=(n_batch, X.shape[1], X.shape[2]), stateful=True))
-    model.add(LSTM(n_neurons, batch_input_shape=(n_batch, X.shape[1], X.shape[2]), stateful=True))
-    model.add(Dense(y.shape[1]))
-    model.compile(loss='mean_squared_error', optimizer='adam')
-    # fit network
-    for i in range(nb_epoch):
-        model.fit(X, y, epochs=1, batch_size=n_batch, verbose=0, shuffle=False)
-        model.reset_states()
-        print('epoch %d ' %(i))
-    return model
+    X = X.reshape(X.shape[0], X.shape[1])
+    models = []
+    for i in range(n_seq):
+        yi = y[:,i]
+        print(yi.shape)
+        print(yi)
+        model = SVR()
+        model.fit(X,yi)
+        models.append(model)
+    return models
 
 # make one forecast with an LSTM,
-def forecast_lstm(model, X, n_batch):
+def forecast_svr(models, X):
 	# reshape input pattern to [samples, timesteps, features]
-    X = X.reshape(1, 1, len(X))
+    X = X.reshape(1, len(X))
     # make forecast
-    forecast = model.predict(X, batch_size=n_batch)
+    forecast = []
+    for model in models:
+        forecast.append(model.predict(X))
     # convert to array
-    return [x for x in forecast[0, :]]
+    return [x for x in forecast]
 
 # evaluate the persistence model
-def make_forecasts(model, n_batch, train, test, n_lag, n_seq):
+def make_forecasts(models, test, n_lag, n_seq):
     forecasts = []
     for i in range(len(test)):
         X, y = test[i, 0:n_lag], test[i, n_lag:]
         # make forecast
-        forecast = forecast_lstm(model, X, n_batch)
+        forecast = forecast_svr(models, X)
+        print(type(forecast))
+        print(forecast)
         # store the forecast
         forecasts.append(forecast)
     return forecasts
@@ -175,16 +173,17 @@ series = loadAndVisualizeData()
 n_lag = 1
 n_seq = 3
 n_test = 10
-n_epochs = 15
+n_epochs = 1500
 n_batchs = 1
 n_neurons = 1
 
 #prepare data
 scaler, train, test = prepare_data(series, n_test,n_lag,n_seq)
 # fit model
-model = fit_lstm(train, n_lag, n_seq, n_batchs, n_epochs, n_neurons)
-# make forecasts
-forecasts = make_forecasts(model, n_batchs, train, test, n_lag, n_seq)
+models = fit_svr(train, n_lag, n_seq)
+
+# # make forecasts
+forecasts = make_forecasts(models, test, n_lag, n_seq)
 # inverse transform forecasts and test
 forecasts = inverse_transform(series, forecasts, scaler, n_test+2)
 actual = [row[n_lag:] for row in test]

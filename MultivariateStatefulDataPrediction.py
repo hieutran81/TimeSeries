@@ -13,6 +13,8 @@ from math import sqrt
 from numpy import concatenate
 from sklearn.metrics import mean_squared_error
 from Dataset_Prediction import *
+from sklearn.utils import check_array
+from sklearn.svm import SVR
 
 
 def parse(x):
@@ -30,7 +32,7 @@ def preprocessData():
     # drop the first 24 hours
     dataset = dataset[24:]
     # summarize first 5 rows
-    print(dataset.head(5))
+    # print(dataset.head(5))
     # save to file
     dataset.to_csv('pollution.csv')
 
@@ -75,9 +77,6 @@ def series_to_supervised(data, n_in=1, n_out=1, dropnan=True):
 	return agg
 
 def preprocess(values):
-    # integer encode direction column 4 with is wind
-    encoder = LabelEncoder()
-    values[:, 4] = encoder.fit_transform(values[:, 4])
     # ensure all is float
     values = values.astype("float32")
 
@@ -86,10 +85,9 @@ def preprocess(values):
     values_scaled = scaler.fit_transform(values)
     # frame as supervised learning
     reframe = series_to_supervised(values_scaled, n_hours, 1)
+    # print(reframe.values.shape)
     # drop column don't need to predict
-    print(reframe.values.shape)
-    print(reframe.head())
-    print(reframe.values.shape)
+    #reframe.drop(reframe.columns[[9, 10, 11, 12, 13, 14, 15]], axis=1, inplace=True)
     return reframe.values,scaler
 
 def split(values):
@@ -98,6 +96,10 @@ def split(values):
 
     # split into input and output
     train_X, train_y = train[:, :n_obs], train[:, -n_features]
+    # print(train_X.shape)
+    # print(train_y.shape)
+    # print(train_y)
+
     test_X, test_y = test[:, :n_obs], test[:, -n_features]
 
     # reshape to be 3d [sample, time step, feature]
@@ -109,25 +111,36 @@ def split(values):
 def fit_lstm():
     # design network
     model = Sequential()
-    model.add(LSTM(50, input_shape=(train_X.shape[1], train_X.shape[2])))
+    model.add(LSTM(50, batch_input_shape=(n_batch,train_X.shape[1], train_X.shape[2]), stateful = True))
     #model.add(SimpleRNN(50, input_shape=(train_X.shape[1], train_X.shape[2])))
 
     model.add(Dense(1))
-    model.compile(loss='mae', optimizer='adam')
+    model.compile(loss='mean_squared_error', optimizer='adam')
     # fit network
-    history = model.fit(train_X, train_y, epochs=50, batch_size=72, validation_data=(test_X, test_y), verbose=2,
-                        shuffle=False)
-    return model, history
+    for i in range(n_epoch):
+        model.fit(train_X, train_y, epochs=1, batch_size= n_batch, verbose=0, shuffle=False)
+        model.reset_states()
+        print('epoch %d ' % (i+1))
+    return model
+
+def fit_svr(train_X):
+    # design model
+    # global train_X
+    model = SVR(C = 1.0, epsilon=0.01)
+    train_X = train_X.reshape((train_X.shape[0],n_obs))
+    model.fit(train_X,train_y)
+    return model
 
 def invert_scale():
     # invert scaling for forecast
-    print(yhat.shape)
-    print(test_X.shape)
-    inv_yhat = concatenate((yhat, test_X[:, -7:]), axis=1)
+    # print(yhat.shape)
+    # print(test_X.shape)
+    shift = -(n_features-1)
+    inv_yhat = concatenate((yhat, test_X[:, shift:]), axis=1)
     inv_yhat = scaler.inverse_transform(inv_yhat)
     inv_yhat = inv_yhat[:, 0]
     # invert scaling for actual
-    inv_y = concatenate((test_y, test_X[:, -7:]), axis=1)
+    inv_y = concatenate((test_y, test_X[:, shift:]), axis=1)
     inv_y = scaler.inverse_transform(inv_y)
     inv_y = inv_y[:, 0]
     return inv_y,inv_yhat
@@ -138,48 +151,65 @@ def visualizeHistory(history):
     plt.legend()
     plt.show()
 
+def cal_mape(y_true, y_pred):
+    # y_true, y_pred = check_array(y_true, y_pred)
+
+    ## Note: does not handle mix 1d representation
+    #if _is_1d(y_true):
+    #    y_true, y_pred = _check_1d_array(y_true, y_pred)
+
+    return np.mean(np.abs((y_true - y_pred) / y_true)) * 100
+
 #load dataset
-dataset = read_csv('pollution.csv',header = 0, index_col=0)
-# values is numpy array shape (43800,8)
-values = dataset.values
-print(values.shape)
+#dataset = read_csv('pollution.csv',header = 0, index_col=0)
+# values is numpy array
+values = data_in_hour()
+n_train = 366 * 24
+#values[:n_train] = replace_abnormal_detection_in_hour(values[:n_train])
 
 # specify number of lag hour
 n_hours = 3
-n_features = 8
+n_features = 6
 n_obs = n_hours * n_features
+n_batch = 72
+n_epoch = 200
 
 #preprocess to ready to train
 values,scaler = preprocess(values)
+values = values[:16992,:]
+print(values.shape)
 
+# split into train and test set
+#365 #* 24
+train_X, train_y, test_X, test_y = split(values)
 
-#
-# # split into train and test set
-# n_train = 365 * 24
-# train_X, train_y, test_X, test_y = split(values)
-#
-# model, history = fit_lstm()
+model = fit_lstm()
+#model = fit_svr(train_X)
 # visualizeHistory(history)
-#
-# # make a prediction
-# yhat = model.predict(test_X)
-# # print("yhat")
-# # print(yhat)
-# # print(yhat.shape)
-#
-# #invert to compute rmse
-# test_X = test_X.reshape((test_X.shape[0], n_hours*n_features))
-# test_y = test_y.reshape((len(test_y), 1))
-# inv_y, inv_yhat = invert_scale()
-# # print(inv_yhat)
-# # print(inv_y)
-#
-# # calculate RMSE
-# rmse = sqrt(mean_squared_error(inv_y, inv_yhat))
-# print('Test RMSE: %.3f' % rmse)
-# plt.plot(inv_y[:100])
-# # plt.title("actual")
-# # plt.figure(2)
-# plt.plot(inv_yhat[:100])
-# plt.title("forecast")
-# plt.show()
+# make a prediction
+# print(test_X.shape)
+# test_X = test_X.reshape((test_X.shape[0],n_obs))
+yhat = model.predict(test_X, batch_size = n_batch)
+# yhat = yhat.reshape(yhat.shape[0],1)
+# print("yhat")
+# print(yhat)
+# print(yhat.shape)
+
+#invert to compute rmse
+test_X = test_X.reshape((test_X.shape[0], n_hours*n_features))
+test_y = test_y.reshape((len(test_y), 1))
+inv_y, inv_yhat = invert_scale()
+# print(inv_yhat)
+# print(inv_y)
+
+# calculate RMSE
+rmse = sqrt(mean_squared_error(inv_y, inv_yhat))
+mape = cal_mape(inv_y, inv_yhat)
+print('Test RMSE: %.3f' % rmse)
+print('Test MAPE: %.3f' % mape)
+plt.plot(inv_y[:50])
+# plt.title("actual")
+# plt.figure(2)
+plt.plot(inv_yhat[:50])
+plt.title("forecast")
+plt.show()

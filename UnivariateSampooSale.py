@@ -6,12 +6,15 @@ from pandas import DataFrame
 from pandas import concat
 from pandas import Series
 import numpy
+import tensorflow as tf
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_squared_error
 from math import sqrt
 from keras.layers import LSTM
 from keras.layers import Dense
 from keras.models import Sequential
+from Dataset_Prediction import read_data
+
 
 
 
@@ -89,13 +92,51 @@ def fit_lstm(train, batch_size, nb_epoch, neurons):
 		print("epoch %d" %(i))
 	return model
 
+# def fit_rnn(train, batch_size, nb_epoch, neurons):
+#     # config networks
+# 	n_train = len(train)
+# 	n_steps = 20
+# 	n_inputs = 1
+# 	n_neurons = 100
+# 	n_outputs = 1
+# 	learning_rate = 0.001
+# 	# data
+# 	X_train, y_train = train[:, 0:-1], train[:, -1]
+# 	X_train = X_train.reshape(X_train.shape[0], 1, X_train.shape[1])
+# 	X = tf.placeholder(tf.float32, [None, n_steps, n_inputs])
+# 	y = tf.placeholder(tf.float32, [None, n_steps, n_inputs])
+# 	# define network
+# 	cell = tf.contrib.rnn.OutputProjectionWrapper(tf.contrib.rnn.BasicRNNCell(num_units=n_neurons, activation=tf.nn.relu), output_size=n_outputs)
+# 	outputs, states = tf.nn.dynamic_rnn(cell, X, dtype=tf.float32)
+#
+# 	loss = tf.reduce_mean(tf.square(outputs - y))
+# 	optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
+# 	training_op = optimizer.minimize(loss)
+# 	init = tf.global_variables_initializer()
+#
+#     # run network
+# 	n_epochs = 1500
+# 	batch_size = 50
+#
+# 	with tf.Session() as sess:
+# 		init.run()
+# 		for epoch in range(nb_epoch):
+# 			for i in range(0, n_train, batch_size):
+# 				end = i + batch_size
+# 				X_batch, y_batch = X_train[i:end,:,:],y_train[i:end]
+# 				sess.run(training_op, feed_dict={X: X_batch, y: y_batch})
+# 			mse = loss.eval(feed_dict={X: X_batch, y: y_batch})
+#             print(epoch, "\tMSE:", mse)
+
 def forecast_lstm(model, batch_size, X):
 	X = X.reshape(1,1,len(X))
 	yhat = model.predict(X, batch_size = batch_size)
 	return yhat[0][0]
 
 # load dataset
-raw_values = loadAndVisualizeData()
+# raw_values = loadAndVisualizeData()
+raw_values = read_data()
+print(raw_values.shape)
 
 # transform data to be stationary
 diff_values = difference(raw_values,1)
@@ -105,28 +146,27 @@ supervised = timeseries_to_supervised(diff_values,1)
 supervised_values = supervised.values
 
 # split into train and test set
-train, test = supervised_values[:-12], supervised_values[-12:]
+train, test = supervised_values[:-2999], supervised_values[-2999:16992]
 
 # transform scale data to [-1,1]
 scaler, train_scaled, test_scaled = scale(train,test)
-
 
 #repeat experiment
 repeats = 1
 error_scores = []
 for r in range(repeats):
 	#fit the model
-	lstm_model = fit_lstm(train_scaled, 1, 120, 4)
+	lstm_model = fit_lstm(train_scaled, 32, 1, 4)
 	#forecast model entire training set to build up state
 	train_reshape = train_scaled[:,0].reshape(len(train_scaled),1,1)
-	lstm_model.predict(train_reshape, batch_size=1)
+	lstm_model.predict(train_reshape, batch_size=32)
 
 	#walk forward validation on test data
 	predictions = []
-	for i in range(len(test_scaled)):
+	for i in range(0,len(test_scaled),32):
 		#make one step forecast
-		X, y = test_scaled[i,0:-1], test_scaled[i,-1]
-		yhat = forecast_lstm(lstm_model,1,X)
+		X, y = test_scaled[i:i+32,0:-1], test_scaled[i:i+32,-1]
+		yhat = forecast_lstm(lstm_model,32,X)
 		#invert scaling
 		yhat = invert_scale(scaler, X, yhat)
 		#invert difference
@@ -140,8 +180,8 @@ for r in range(repeats):
 	rmse = sqrt(mean_squared_error(raw_values[-12:],predictions))
 	print("%d Test RMSe : %f" %((r+1),rmse))
 	error_scores.append(rmse)
-	plt.plot(raw_values[-12:])
-	plt.plot(predictions)
+	plt.plot(raw_values[-100:])
+	plt.plot(predictions[-100:])
 	plt.show()
 
 #line plot to visualize

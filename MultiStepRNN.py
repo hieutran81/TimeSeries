@@ -6,13 +6,10 @@ from pandas import DataFrame
 from pandas import concat
 from pandas import Series
 from sklearn.preprocessing import MinMaxScaler
-from keras.models import Sequential
-from keras.layers import LSTM
-from keras.layers import Dense
-from keras.layers import SimpleRNN
 from numpy import array
 from math import sqrt
 from sklearn.metrics import mean_squared_error
+import tensorflow as tf
 
 # load dataset
 def loadAndVisualizeData():
@@ -69,7 +66,7 @@ def prepare_data(series, n_test, n_lag, n_seq):
     #transform to  supervised learning
     supervised = series_to_supervised(scaled_values,n_lag,n_seq)
     supervised_values = supervised.values
-    print(supervised.head())
+    # print(supervised.head())
 
     # split into train and test set
     train, test = supervised_values[0:-n_test], supervised_values[-n_test:]
@@ -94,6 +91,46 @@ def fit_lstm(train, n_lag, n_seq, n_batch, nb_epoch, n_neurons):
         print('epoch %d ' %(i))
     return model
 
+def fit_rnn():
+    global X, y, cell, outputs, states, real, loss, optimizer, training_op, init
+	# data
+    n_train = len(train)
+    X_train, y_train = train[:, 0:n_lag], train[:, n_lag:]
+    X_train = X_train.reshape(X_train.shape[0], 1, X_train.shape[1])
+    X = tf.placeholder(tf.float32, [None, n_steps, n_inputs])
+    y = tf.placeholder(tf.float32, [None, n_outputs])
+    # define network
+    cell = tf.contrib.rnn.OutputProjectionWrapper(tf.contrib.rnn.BasicRNNCell(num_units=n_neurons, activation=tf.nn.relu), output_size=n_outputs)
+    outputs, states = tf.nn.dynamic_rnn(cell, X, dtype=tf.float32)
+    real = tf.contrib.layers.fully_connected(states, n_outputs, activation_fn = None)
+
+    loss = tf.reduce_mean(tf.square(real - y))
+    optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
+    training_op = optimizer.minimize(loss)
+    init = tf.global_variables_initializer()
+    saver = tf.train.Saver()
+    with tf.Session() as sess:
+        init.run()
+        for epoch in range(n_epochs):
+            for i in range(0, n_train, n_batchs):
+                end = i + n_batchs
+                X_batch, y_batch = X_train[i:end, :, :], y_train[i:end]
+                sess.run(training_op, feed_dict={X: X_batch, y: y_batch})
+            mse = loss.eval(feed_dict={X: X_train, y: y_train})
+            #print(epoch, "\tMSE:", mse)
+        saver.save(sess,"./multistep_model.ckpt")
+
+def forecast_rnn(X_test):
+    global outputs,init, X
+    saver = tf.train.Saver()
+    X_test = X_test.reshape(1, 1, len(X_test) )
+    with tf.Session() as sess:
+        saver.restore(sess,save_path="./multistep_model.ckpt")
+        sess.run(init)
+        sess.run(real, feed_dict = {X: X_test})
+        y_pred = real.eval(feed_dict = {X: X_test})
+    return y_pred
+
 # make one forecast with an LSTM,
 def forecast_lstm(model, X, n_batch):
 	# reshape input pattern to [samples, timesteps, features]
@@ -104,14 +141,16 @@ def forecast_lstm(model, X, n_batch):
     return [x for x in forecast[0, :]]
 
 # evaluate the persistence model
-def make_forecasts(model, n_batch, train, test, n_lag, n_seq):
+def make_forecasts( test, n_lag, n_seq):
     forecasts = []
     for i in range(len(test)):
         X, y = test[i, 0:n_lag], test[i, n_lag:]
         # make forecast
-        forecast = forecast_lstm(model, X, n_batch)
+        forecast = forecast_rnn(X)
+        print(forecast.shape)
+        print(forecast)
         # store the forecast
-        forecasts.append(forecast)
+        forecasts.append(forecast[0])
     return forecasts
 
 # invert differenced forecast
@@ -175,17 +214,26 @@ series = loadAndVisualizeData()
 n_lag = 1
 n_seq = 3
 n_test = 10
-n_epochs = 15
+n_epochs = 1500
 n_batchs = 1
 n_neurons = 1
+n_steps = 1
+n_inputs = 1
+n_neurons = 100
+n_outputs = 3
+learning_rate = 0.001
 
 #prepare data
 scaler, train, test = prepare_data(series, n_test,n_lag,n_seq)
+
 # fit model
-model = fit_lstm(train, n_lag, n_seq, n_batchs, n_epochs, n_neurons)
-# make forecasts
-forecasts = make_forecasts(model, n_batchs, train, test, n_lag, n_seq)
-# inverse transform forecasts and test
+fit_rnn()
+# model = fit_lstm(train, n_lag, n_seq, n_batchs, n_epochs, n_neurons)
+
+# # make forecasts
+forecasts = make_forecasts( test, n_lag, n_seq)
+print(forecasts)
+# # inverse transform forecasts and test
 forecasts = inverse_transform(series, forecasts, scaler, n_test+2)
 actual = [row[n_lag:] for row in test]
 actual = inverse_transform(series, actual, scaler, n_test+2)

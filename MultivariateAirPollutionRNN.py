@@ -5,14 +5,14 @@ from pandas import concat
 from matplotlib import pyplot as plt
 from sklearn.preprocessing import LabelEncoder
 from sklearn.preprocessing import MinMaxScaler
-from keras.models import  Sequential
-from keras.layers import Dense
-from keras.layers import SimpleRNN
-from keras.layers import LSTM
+# from keras.models import  Sequential
+# from keras.layers import Dense
+# from keras.layers import SimpleRNN
+# from keras.layers import LSTM
 from math import sqrt
 from numpy import concatenate
 from sklearn.metrics import mean_squared_error
-from Dataset_Prediction import *
+import tensorflow as tf
 
 
 def parse(x):
@@ -87,9 +87,8 @@ def preprocess(values):
     # frame as supervised learning
     reframe = series_to_supervised(values_scaled, n_hours, 1)
     # drop column don't need to predict
-    print(reframe.values.shape)
+    reframe.drop(reframe.columns[[9, 10, 11, 12, 13, 14, 15]], axis=1, inplace=True)
     print(reframe.head())
-    print(reframe.values.shape)
     return reframe.values,scaler
 
 def split(values):
@@ -119,6 +118,51 @@ def fit_lstm():
                         shuffle=False)
     return model, history
 
+def fit_rnn():
+    global X, y, cell, outputs, states, real, loss, optimizer, training_op, init
+	# data
+    print(train_X.shape)
+    print(train_y.shape)
+    X = tf.placeholder(tf.float32, [None, n_steps, n_inputs])
+    y = tf.placeholder(tf.float32, [None])
+    # define network
+    cell = tf.contrib.rnn.OutputProjectionWrapper(tf.contrib.rnn.BasicRNNCell(num_units=n_neurons, activation=tf.nn.relu), output_size=n_outputs)
+    outputs, states = tf.nn.dynamic_rnn(cell, X, dtype=tf.float32)
+    real = tf.contrib.layers.fully_connected(states, n_outputs, activation_fn = None)
+
+    loss = tf.reduce_mean(tf.square(real - y))
+    optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
+    training_op = optimizer.minimize(loss)
+    init = tf.global_variables_initializer()
+    saver = tf.train.Saver()
+    with tf.Session() as sess:
+        init.run()
+        for epoch in range(n_epochs):
+            for i in range(0, n_train, batch_size):
+                end = i + batch_size
+                X_batch, y_batch = train_X[i:end, :, :], train_y[i:end]
+                sess.run(training_op, feed_dict={X: X_batch, y: y_batch})
+            mse = loss.eval(feed_dict={X: train_X, y: train_y})
+            #print(epoch, "\tMSE:", mse)
+        saver.save(sess,"./multivariate_model.ckpt")
+
+def forecast_rnn(X_test):
+    global outputs,init, X
+    print("x test")
+    print(X_test.shape)
+    saver = tf.train.Saver()
+    X_test = X_test.reshape(X_test.shape[0],n_steps , n_inputs)
+    print(X_test.shape)
+    with tf.Session() as sess:
+        saver.restore(sess,save_path="./multivariate_model.ckpt")
+        sess.run(init)
+        print(type(X))
+        sess.run(real, feed_dict = {X: X_test})
+        y_pred = real.eval(feed_dict = {X: X_test})
+    return y_pred
+
+
+
 def invert_scale():
     # invert scaling for forecast
     print(yhat.shape)
@@ -132,17 +176,10 @@ def invert_scale():
     inv_y = inv_y[:, 0]
     return inv_y,inv_yhat
 
-def visualizeHistory(history):
-    plt.plot(history.history['loss'], label='train')
-    plt.plot(history.history['val_loss'], label='test')
-    plt.legend()
-    plt.show()
-
 #load dataset
 dataset = read_csv('pollution.csv',header = 0, index_col=0)
 # values is numpy array shape (43800,8)
 values = dataset.values
-print(values.shape)
 
 # specify number of lag hour
 n_hours = 3
@@ -153,33 +190,44 @@ n_obs = n_hours * n_features
 values,scaler = preprocess(values)
 
 
-#
-# # split into train and test set
-# n_train = 365 * 24
-# train_X, train_y, test_X, test_y = split(values)
-#
-# model, history = fit_lstm()
-# visualizeHistory(history)
-#
-# # make a prediction
-# yhat = model.predict(test_X)
-# # print("yhat")
-# # print(yhat)
-# # print(yhat.shape)
-#
-# #invert to compute rmse
-# test_X = test_X.reshape((test_X.shape[0], n_hours*n_features))
-# test_y = test_y.reshape((len(test_y), 1))
-# inv_y, inv_yhat = invert_scale()
-# # print(inv_yhat)
-# # print(inv_y)
-#
-# # calculate RMSE
-# rmse = sqrt(mean_squared_error(inv_y, inv_yhat))
-# print('Test RMSE: %.3f' % rmse)
-# plt.plot(inv_y[:100])
-# # plt.title("actual")
-# # plt.figure(2)
-# plt.plot(inv_yhat[:100])
-# plt.title("forecast")
-# plt.show()
+
+# split into train and test set
+n_train = 365 * 24
+train_X, train_y, test_X, test_y = split(values)
+
+# config networks
+n_train = len(train_X)
+n_steps = 3
+n_inputs = 8
+n_neurons = 100
+n_outputs = 1
+learning_rate = 0.001
+batch_size = 72
+n_epochs = 50
+
+
+
+fit_rnn()
+
+# make a prediction
+yhat = forecast_rnn(test_X)
+# print("yhat")
+# print(yhat)
+# print(yhat.shape)
+
+#invert to compute rmse
+test_X = test_X.reshape((test_X.shape[0], n_hours*n_features))
+test_y = test_y.reshape((len(test_y), 1))
+inv_y, inv_yhat = invert_scale()
+# print(inv_yhat)
+# print(inv_y)
+
+# calculate RMSE
+rmse = sqrt(mean_squared_error(inv_y, inv_yhat))
+print('Test RMSE: %.3f' % rmse)
+plt.plot(inv_y[:100])
+# plt.title("actual")
+# plt.figure(2)
+plt.plot(inv_yhat[:100])
+plt.title("forecast")
+plt.show()
